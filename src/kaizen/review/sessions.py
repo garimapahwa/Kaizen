@@ -5,17 +5,18 @@ switch either of them client-side. Both now live here. The server issues an opaq
 slot and the blind flag against it, and derives blind mode from the workspace policy rather than from
 anything the caller sends. Changing the policy or opening a session is an audit event.
 
-This is not authentication: anyone with access to the machine can open a session under any name. It
-makes the reviewer's identity and the blind flag *server-side, explicit and audited*, which is what an
-independent-review process needs. A shared deployment still needs real sign-in (see
-`docs/security-review.md`).
+A session is only opened after the caller proves control of a BD mailbox: `OtpStore` below holds the
+one-time codes the API mails out, and `POST /api/auth/verify-otp` is the only route that calls
+`SessionStore.open`. Identity is therefore the verified email address, and the blind flag stays a
+server-side decision derived from the workspace policy rather than anything the caller sends.
 """
 
 from __future__ import annotations
 
+import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from kaizen.storage.db import Database
 
@@ -119,3 +120,57 @@ class SessionStore:
     def active(self) -> list[ReviewSession]:
         rows = self.conn.execute("SELECT * FROM sessions WHERE ended_at = '' ORDER BY created_at").fetchall()
         return [ReviewSession(r["token"], r["reviewer"], int(r["slot"]), bool(r["blind"]), r["created_at"]) for r in rows]
+
+
+class OtpStore:
+    """One-time sign-in codes, in the workspace database next to the sessions they unlock.
+
+    Only the SHA-256 of a code is stored, a code is single use, and a code dies after
+    `MAX_ATTEMPTS` guesses so a six-digit space cannot be walked through.
+
+    Two tables, because they answer different questions: `otp_codes` holds at most one live code per
+    address (a new code replaces the old one), while `otp_requests` is an append-only log of sends that
+    `recent_count` reads for rate limiting — counting `otp_codes` could never exceed one.
+    """
+
+    MAX_ATTEMPTS = 5
+
+    def __init__(self, db: Database):
+        self.db = db
+        self.conn = db.conn
+
+    def put(self, email: str, code_hash: str, ttl_seconds: int = 600) -> None:
+        """Store the hash of a new code for `email`, replacing any code already outstanding."""
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat(timespec="seconds")
+        created_at = now.isoformat(timespec="seconds")
+        with self.db.lock:
+            self.conn.execute("DELETE FROM otp_codes WHERE email = ?", (email,))
+            self.conn.execute(
+                "INSERT INTO otp_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?,?,?,0,?)",
+                (email, code_hash, expires_at, created_at),
+            )
+            self.conn.execute("INSERT INTO otp_requests (email, created_at) VALUES (?,?)", (email, created_at))
+            self.conn.commit()
+
+    def consume(self, email: str, code_hash: str) -> bool:
+        """True exactly once, for the right unexpired code. Every call costs an attempt."""
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.lock:
+            row = self.conn.execute("SELECT * FROM otp_codes WHERE email = ? AND expires_at > ?", (email, now)).fetchone()
+            if row is None:
+                return False
+            attempts = int(row["attempts"]) + 1
+            self.conn.execute("UPDATE otp_codes SET attempts = ? WHERE email = ?", (attempts, email))
+            self.conn.commit()
+            if attempts > self.MAX_ATTEMPTS or not hmac.compare_digest(str(row["code_hash"]), code_hash):
+                return False
+            self.conn.execute("DELETE FROM otp_codes WHERE email = ?", (email,))
+            self.conn.commit()
+        return True
+
+    def recent_count(self, email: str, window_seconds: int = 600) -> int:
+        """Codes sent to `email` inside the window, for rate limiting."""
+        since = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat(timespec="seconds")
+        row = self.conn.execute("SELECT COUNT(*) AS n FROM otp_requests WHERE email = ? AND created_at >= ?", (email, since)).fetchone()
+        return int(row["n"]) if row else 0

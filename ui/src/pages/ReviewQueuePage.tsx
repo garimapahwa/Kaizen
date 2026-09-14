@@ -7,7 +7,7 @@ import { ConfirmDialog, ErrorBox, Loading } from "../components/Feedback";
 import { HotkeyHelp, HotkeyHint } from "../components/HotkeyHelp";
 import { ImportDecisions } from "../components/ImportDecisions";
 import { Button, Card, EmptyState, PageHeader, TableSkeleton } from "../components/ui";
-import { enc, fmtQty } from "../lib/format";
+import { displayName, enc, fmtQty } from "../lib/format";
 import { useHotkeys } from "../lib/hotkeys";
 import { PAGE_SIZE, queueParams, queueQueryFromParams } from "../lib/queue";
 import { useReviewer } from "../lib/reviewer";
@@ -282,7 +282,7 @@ export default function ReviewQueuePage() {
       {bulkOpen && (
         <ConfirmDialog title="Accept all clean rows" confirmLabel={bulkCount ? `Accept ${bulkCount} rows` : "Accept"} onConfirm={doBulk} onCancel={() => setBulkOpen(false)} busy={bulkBusy || bulkCount === null}>
           <p>
-            Records an <b>Accept</b> decision as <b>{name}</b> (reviewer {slot}) on every row that has no discrepancy and does not need validation. Rows you already decided are skipped.
+            Records an <b>Accept</b> decision as <b title={name}>{displayName(name)}</b> (reviewer {slot}) on every row that has no discrepancy and does not need validation. Rows you already decided are skipped.
           </p>
           {bulkCount === null && !bulkErr && <Loading lines={2} />}
           {bulkCount !== null && (

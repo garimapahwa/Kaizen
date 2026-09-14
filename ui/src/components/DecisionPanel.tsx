@@ -1,7 +1,7 @@
 import { EyeSlash } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { fmtDate } from "../lib/format";
+import { displayName, fmtDate } from "../lib/format";
 import { useHotkeys } from "../lib/hotkeys";
 import { useReviewer } from "../lib/reviewer";
 import { useToast } from "../lib/toast";
@@ -109,7 +109,7 @@ export function DecisionPanel({ runId, rowId, detail, onChanged }: Props) {
         title="Reviewer decision"
         description={
           <span className="flex items-center gap-1.5">
-            Deciding as <b className="text-ink">{name}</b> · reviewer {slot}
+            Deciding as <b className="text-ink" title={name}>{displayName(name)}</b> · reviewer {slot}
             {viewerParams.blind && (
               <Badge tone="info" dot={false}>
                 <EyeSlash size={12} /> Blind

@@ -1,6 +1,9 @@
 """FastAPI application: the reviewer UI's backend. Local only; no external calls."""
 
+import hashlib
+import os
 import re
+import secrets
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -13,6 +16,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from kaizen import __version__
+from kaizen.api.mailer import dev_mode, send_otp_email
 from kaizen.models import Classification, Run, Thresholds
 from kaizen.pipeline import load_run, run_folder, save_run
 from kaizen.reporting.annotated_bom import write_annotated_bom
@@ -23,14 +27,49 @@ from kaizen.review.action_items import ActionItemStore
 from kaizen.review.business import BusinessAssumptions, business_case
 from kaizen.review.mining import approve_suggestion, mine_suggestions, reject_suggestion, terminology_worklist
 from kaizen.review.rundiff import diff_runs
-from kaizen.review.sessions import POLICY_REQUIRED, ReviewSession, SessionStore
+from kaizen.review.sessions import POLICY_REQUIRED, OtpStore, ReviewSession, SessionStore
 from kaizen.review.store import ReviewStore
 from kaizen.terminology.exchange import export_xlsx, import_csv, import_xlsx
 from kaizen.workspace import Workspace
 
 SESSION_COOKIE = "kaizen_session"
-SIGN_IN_HINT = "Sign in first: POST /api/sessions with your reviewer name and slot."
+SIGN_IN_HINT = "Sign in first: POST /api/auth/request-otp with your BD email, then /api/auth/verify-otp with the code and your slot."
 BLIND_REFUSAL = "Not available while you are reviewing blind: it would reveal reviewer 1's decisions. End your blind session or ask reviewer 1."
+
+# ---- email sign-in -----------------------------------------------------------------------------
+ALLOWED_EMAIL_DOMAINS = {"bd.com"}
+BAD_DOMAIN = "Only BD email addresses can sign in."
+BAD_CODE = "Invalid or expired code."
+OTP_TTL_SECONDS = 600
+OTP_RATE_LIMIT = 3  # codes per address per TTL window
+
+
+def _rate_limit() -> int:
+    """Codes per address per window. `KAIZEN_OTP_RATE_LIMIT` raises it for shared test workspaces."""
+    try:
+        return max(1, int(os.environ.get("KAIZEN_OTP_RATE_LIMIT") or OTP_RATE_LIMIT))
+    except ValueError:
+        return OTP_RATE_LIMIT
+
+
+def _allowed_domains() -> set[str]:
+    """Read at call time so a deployment can set KAIZEN_ALLOWED_DOMAINS without rebuilding the app."""
+    raw = os.environ.get("KAIZEN_ALLOWED_DOMAINS") or ",".join(sorted(ALLOWED_EMAIL_DOMAINS))
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}
+
+
+def _bd_email(raw: str) -> str:
+    """The address, normalised, or a 400. The domain must match a whole allowed domain: splitting on the
+    last `@` and comparing for equality is what stops `someone@bd.com.evil.io` from passing as BD."""
+    email = (raw or "").strip().lower()
+    local, sep, domain = email.rpartition("@")
+    if not sep or not local or domain not in _allowed_domains():
+        raise HTTPException(400, BAD_DOMAIN)
+    return email
+
+
+def _code_hash(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 SEVERITY_RANK = {"BLOCKER": 0, "MAJOR": 1, "MINOR": 2, "INFO": 3, None: 4}
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -112,6 +151,7 @@ def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None) -
     review = ReviewStore(ws.db)
     items = ActionItemStore(ws.db)
     sessions = SessionStore(ws.db)
+    otps = OtpStore(ws.db)
 
     # ---- reviewer sessions --------------------------------------------------------------------
     # Identity, slot and blind mode are server-side. The token lives in an HttpOnly cookie so page
@@ -146,16 +186,51 @@ def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None) -
         cache.put(run)
         return _summary(run, review)
 
-    # ---- runs ---------------------------------------------------------------------------------
-    @app.post("/api/sessions")
-    def open_session(response: FastResponse, payload: dict = Body(...)):
-        """Start a review session. The server decides blind mode from the workspace policy."""
+    # ---- email sign-in ------------------------------------------------------------------------
+    # A session can only be opened by someone who received a code at a BD address. The code is mailed,
+    # never returned, so the response is the same whether or not anyone reads that mailbox.
+
+    def _start_session(response: FastResponse, reviewer: str, payload: dict) -> dict:
         try:
-            s = sessions.open(payload.get("reviewer", ""), int(payload.get("slot", 1)), payload.get("blind"))
+            s = sessions.open(reviewer, int(payload.get("slot", 1)), payload.get("blind"))
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
         response.set_cookie(SESSION_COOKIE, s.token, httponly=True, samesite="lax", path="/")
         return s.to_dict(sessions.policy())
+
+    @app.post("/api/auth/request-otp")
+    def request_otp(payload: dict = Body(...)):
+        """Mail a six-digit code to a BD address. The code never appears in the response."""
+        email = _bd_email(payload.get("email", ""))
+        if otps.recent_count(email, OTP_TTL_SECONDS) >= _rate_limit():
+            raise HTTPException(429, "Too many codes requested for this address. Wait a few minutes and try again.")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        otps.put(email, _code_hash(code), OTP_TTL_SECONDS)
+        try:
+            send_otp_email(email, code)
+        except RuntimeError as e:
+            raise HTTPException(502, str(e))
+        ws.db.audit(email, "auth.otp_requested", "sign-in code sent")
+        ws.db.conn.commit()
+        return {"ok": True}
+
+    @app.post("/api/auth/verify-otp")
+    def verify_otp(response: FastResponse, payload: dict = Body(...)):
+        """Exchange a code for a review session. The verified address becomes the reviewer's identity."""
+        email = _bd_email(payload.get("email", ""))
+        if not otps.consume(email, _code_hash(str(payload.get("code", "")).strip())):
+            ws.db.audit(email, "auth.otp_failed", "code rejected")
+            ws.db.conn.commit()
+            raise HTTPException(401, BAD_CODE)
+        return _start_session(response, email, payload)
+
+    # ---- runs ---------------------------------------------------------------------------------
+    @app.post("/api/sessions")
+    def open_session(response: FastResponse, payload: dict = Body(...)):
+        """Superseded by /api/auth/verify-otp; open only in dev mode, where there is no mail server."""
+        if not dev_mode():
+            raise HTTPException(403, "Use /api/auth/verify-otp")
+        return _start_session(response, payload.get("reviewer", ""), payload)
 
     @app.get("/api/sessions/current")
     def current_session(session: ReviewSession | None = Depends(_open_session)):

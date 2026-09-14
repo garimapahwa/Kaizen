@@ -22,6 +22,14 @@ export function shortSha(s: string | null | undefined, n = 12): string {
   return s ? s.slice(0, n) : "—";
 }
 
+/** A reviewer's email as a name to show: dharma.reddy@bd.com → "Dharma Reddy". Decisions, exports and the
+ *  audit trail always carry the address itself; this is for headers and labels only. */
+export function displayName(email: string): string {
+  const words = (email.split("@")[0] ?? "").split(/[._]+/).filter(Boolean);
+  if (!words.length) return email;
+  return words.map((p) => p[0].toUpperCase() + p.slice(1).toLowerCase()).join(" ");
+}
+
 /** Product family = leading digits of the SKU (e.g. 1295108NS → 1295108). Mirrors the engine's grouping. */
 export function familyOf(sku: string): string {
   return sku.match(/^\d+/)?.[0] ?? sku;

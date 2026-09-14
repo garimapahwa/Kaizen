@@ -1,16 +1,39 @@
 """API contract used by the reviewer UI. Runs against a temporary workspace; no network."""
 
 import io
+import os
 
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
+import kaizen.api.app as app_module
 from kaizen.api.app import create_app
 from kaizen.datasets.build import build_golden
 from kaizen.workspace import Workspace
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+DHARMA = "dharma.reddy@bd.com"
+HEMANT = "hemant@bd.com"
+
+_sent: dict[str, str] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _otp_harness():
+    """Capture the mailed codes instead of sending them, and lift the per-address send limit: these
+    tests share one workspace and sign the same two reviewers in many times over. The limit itself is
+    tested in tests/integration/test_auth_otp.py."""
+    original, prior = app_module.send_otp_email, os.environ.get("KAIZEN_OTP_RATE_LIMIT")
+    app_module.send_otp_email = lambda to, code: _sent.__setitem__(to, code)
+    os.environ["KAIZEN_OTP_RATE_LIMIT"] = "1000"
+    yield
+    app_module.send_otp_email = original
+    if prior is None:
+        os.environ.pop("KAIZEN_OTP_RATE_LIMIT", None)
+    else:
+        os.environ["KAIZEN_OTP_RATE_LIMIT"] = prior
 
 
 @pytest.fixture(scope="module")
@@ -19,8 +42,8 @@ def env(tmp_path_factory):
     golden = build_golden(root / "golden")
     ws = Workspace(root / "ws")
     client = TestClient(create_app(ws))
-    # Reviewer identity is server-side now, so the shared client signs in as the facilitator.
-    assert client.post("/api/sessions", json={"reviewer": "Dharma", "slot": 1}).status_code == 200
+    # Reviewer identity is a verified BD address now, so the shared client signs in as the facilitator.
+    sign_in(client, DHARMA, 1)
     r = client.post("/api/runs/from-path", json={"path": str(golden)})
     assert r.status_code == 200, r.text
     return client, golden, ws, r.json()["run_id"]
@@ -78,7 +101,7 @@ def test_decisions_blind_mode_disagreement_and_finalize(env):
     assert r.status_code == 200 and r.json()["state"] == "REVIEWER_1_COMPLETE"
 
     reviewer2 = TestClient(create_app(ws))
-    assert reviewer2.post("/api/sessions", json={"reviewer": "Hemant", "slot": 2}).json()["blind"] is True
+    assert sign_in(reviewer2, HEMANT, 2)["blind"] is True
     blind = reviewer2.get(f"/api/runs/{run_id}/results/{rid}").json()
     assert blind["decisions"]["1"] is None and blind["result"]["classification"] == "MISMATCH"
     r = reviewer2.post(f"/api/runs/{run_id}/decisions", json={"row_id": rid, "decision": "ACCEPT"})
@@ -101,7 +124,8 @@ def test_save_as_relationship_and_next_run_uses_it(env):
     r = client.post(f"/api/runs/{run_id}/relationships/from-row", json={"row_id": chlora["row_id"], "by": "Dharma", "scope": "global", "anchor": True, "notes": "confirmed in review"})
     assert r.status_code == 200, r.text
     rel = r.json()
-    assert rel["provenance"] == "learned" and rel["item_anchors"] == ["4440003"] and rel["created_by"] == "Dharma"
+    assert rel["provenance"] == "learned" and rel["item_anchors"] == ["4440003"]
+    assert rel["created_by"] == DHARMA, "the signed-in session names the author, not the payload"
     assert "CHLORAPREP APPLICATOR 3ML" in rel["aliases"]
     r2 = client.post("/api/runs/from-path", json={"path": str(golden / "sku-002")})
     run2 = r2.json()["run_id"]
@@ -182,8 +206,13 @@ def _fresh(ws):
     return TestClient(create_app(ws))
 
 
-def sign_in(client, name: str, slot: int) -> dict:
-    r = client.post("/api/sessions", json={"reviewer": name, "slot": slot})
+def sign_in(client, email: str, slot: int, blind=None) -> dict:
+    """Through the front door: request a code, then exchange it for a session."""
+    assert client.post("/api/auth/request-otp", json={"email": email}).status_code == 200
+    body = {"email": email, "code": _sent[email], "slot": slot}
+    if blind is not None:
+        body["blind"] = blind
+    r = client.post("/api/auth/verify-otp", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -192,14 +221,14 @@ def test_session_lifecycle_and_cookie(env):
     _, _, ws, _ = env
     c = _fresh(ws)
     assert c.get("/api/sessions/current").json()["session"] is None
-    s = sign_in(c, "Dharma", 1)
-    assert s["reviewer"] == "Dharma" and s["slot"] == 1 and s["blind"] is False
+    s = sign_in(c, DHARMA, 1)
+    assert s["reviewer"] == DHARMA and s["slot"] == 1 and s["blind"] is False
     assert "token" not in s, "the token belongs in the cookie, not the response body"
-    assert c.get("/api/sessions/current").json()["session"]["reviewer"] == "Dharma"
+    assert c.get("/api/sessions/current").json()["session"]["reviewer"] == DHARMA
     assert c.delete("/api/sessions/current").json()["ended"] is True
     assert c.get("/api/sessions/current").json()["session"] is None
-    assert c.post("/api/sessions", json={"reviewer": "  ", "slot": 1}).status_code == 400
-    assert c.post("/api/sessions", json={"reviewer": "Dharma", "slot": 7}).status_code == 400
+    assert c.post("/api/auth/request-otp", json={"email": DHARMA}).status_code == 200
+    assert c.post("/api/auth/verify-otp", json={"email": DHARMA, "code": _sent[DHARMA], "slot": 7}).status_code == 400
 
 
 def test_review_endpoints_refuse_an_anonymous_caller(env):
@@ -214,13 +243,13 @@ def test_review_endpoints_refuse_an_anonymous_caller(env):
 def test_blind_mode_is_taken_from_the_session_not_the_query_string(env):
     _, _, ws, run_id = env
     c1 = _fresh(ws)
-    sign_in(c1, "Dharma", 1)
+    sign_in(c1, DHARMA, 1)
     row = c1.get(f"/api/runs/{run_id}/results", params={"check": "BOM_LABEL", "classification": "MISMATCH"}).json()["rows"][0]
     rid = row["row_id"]
     c1.post(f"/api/runs/{run_id}/decisions", json={"row_id": rid, "decision": "OVERRIDE", "override_classification": "EQUIVALENT", "comment": "same part"})
 
     c2 = _fresh(ws)
-    s = sign_in(c2, "Hemant", 2)
+    s = sign_in(c2, HEMANT, 2)
     assert s["blind"] is True and s["blind_review_policy"] == "required"
     # The old client-controlled parameters are ignored.
     page = c2.get(f"/api/runs/{run_id}/results", params={"viewer": 1, "blind": "false", "check": "BOM_LABEL"}).json()
@@ -241,26 +270,26 @@ def test_blind_mode_is_taken_from_the_session_not_the_query_string(env):
 def test_decision_identity_comes_from_the_session(env):
     _, _, ws, run_id = env
     c = _fresh(ws)
-    sign_in(c, "Hemant", 2)
+    sign_in(c, HEMANT, 2)
     row = c.get(f"/api/runs/{run_id}/results", params={"check": "BOM_DRAWING"}).json()["rows"][0]
     # A caller claiming a different slot or name is refused / ignored, not believed.
     bad = c.post(f"/api/runs/{run_id}/decisions", json={"row_id": row["row_id"], "slot": 1, "decision": "ACCEPT"})
     assert bad.status_code == 400 and "slot" in bad.json()["detail"].lower()
     ok = c.post(f"/api/runs/{run_id}/decisions", json={"row_id": row["row_id"], "reviewer": "Dharma", "decision": "ACCEPT"}).json()
-    assert ok["decisions"]["2"]["reviewer"] == "Hemant" and ok["decisions"]["2"]["blind"] is True
+    assert ok["decisions"]["2"]["reviewer"] == HEMANT and ok["decisions"]["2"]["blind"] is True
     assert "1" not in {k for k, v in ok["decisions"].items() if v}
 
 
 def test_blind_reviewer_cannot_read_the_audit_log_or_export_the_workbook(env):
     _, _, ws, run_id = env
     c = _fresh(ws)
-    sign_in(c, "Hemant", 2)
+    sign_in(c, HEMANT, 2)
     for path in ("/api/audit", f"/api/runs/{run_id}/export.xlsx"):
         r = c.get(path)
         assert r.status_code == 403, path
         assert "blind" in r.json()["detail"].lower()
     c2 = _fresh(ws)
-    sign_in(c2, "Dharma", 1)
+    sign_in(c2, DHARMA, 1)
     assert c2.get("/api/audit").status_code == 200
     assert c2.get(f"/api/runs/{run_id}/export.xlsx").status_code == 200
 
@@ -273,7 +302,7 @@ def test_policy_can_be_relaxed_and_then_reviewer_two_may_be_unblinded(env):
     sessions.set_policy(POLICY_OPTIONAL, by="Rahul")
     try:
         c = _fresh(ws)
-        assert c.post("/api/sessions", json={"reviewer": "Hemant", "slot": 2, "blind": False}).json()["blind"] is False
+        assert sign_in(c, HEMANT, 2, blind=False)["blind"] is False
         anon = _fresh(ws)
         assert anon.get(f"/api/runs/{run_id}/results").status_code == 200, "optional policy keeps the anonymous path open"
     finally:
@@ -291,7 +320,7 @@ def test_certificate_pdf_for_one_sku_and_for_the_run(env):
     assert whole.status_code == 200 and len(whole.content) > len(one.content)
     assert client.get(f"/api/runs/{run_id}/certificate.pdf", params={"sku": "nope"}).status_code == 404
     blind = _fresh(ws)
-    sign_in(blind, "Hemant", 2)
+    sign_in(blind, HEMANT, 2)
     assert blind.get(f"/api/runs/{run_id}/certificate.pdf").status_code == 403
 
 
@@ -322,7 +351,7 @@ def test_excel_round_trip_through_the_api(env):
     applied = client.post(f"/api/runs/{run_id}/decisions/import", files={"file": ("report.xlsx", buf.getvalue(), XLSX_MIME)}).json()
     assert applied["applied"] == [row["row_id"]]
     d = client.get(f"/api/runs/{run_id}/results/{row['row_id']}").json()["decisions"]["1"]
-    assert d["decision"] == "CONFIRM_DISCREPANCY" and d["reviewer"] == "Dharma" and d["comment"] == "decided in Excel"
+    assert d["decision"] == "CONFIRM_DISCREPANCY" and d["reviewer"] == DHARMA and d["comment"] == "decided in Excel"
     wrong = client.post(f"/api/runs/{run_id}/decisions/import", files={"file": ("x.xlsx", b"not a workbook", XLSX_MIME)})
     assert wrong.status_code == 400
 

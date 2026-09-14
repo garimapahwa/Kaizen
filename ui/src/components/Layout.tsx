@@ -4,7 +4,7 @@ import { ChartBar, ClipboardText, Files, Folders, GitDiff, Lightbulb, ListChecks
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, matchPath, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
-import { enc } from "../lib/format";
+import { displayName, enc } from "../lib/format";
 import { useReviewer } from "../lib/reviewer";
 import { useAsync } from "../lib/useAsync";
 import { SignIn } from "./SignIn";
@@ -129,10 +129,10 @@ export function Layout() {
             {session ? (
               <div className="flex items-center gap-2.5" title={`${session.reviewer} · reviewer ${session.slot}${session.blind ? " · blind" : ""}. Identity, slot and blind mode are held by the server for this session.`}>
                 <span className="w-8 h-8 rounded-full bg-brand-100 text-brand-700 grid place-items-center text-xs font-semibold shrink-0" aria-hidden>
-                  {initials(session.reviewer)}
+                  {initials(displayName(session.reviewer))}
                 </span>
                 <span className="leading-tight hidden md:block whitespace-nowrap">
-                  <span className="block text-sm font-medium text-ink">{session.reviewer}</span>
+                  <span className="block text-sm font-medium text-ink">{displayName(session.reviewer)}</span>
                   <span className="block text-2xs text-ink-3">{session.slot === 1 ? "Reviewer 1 · facilitator" : "Reviewer 2 · independent"}</span>
                 </span>
                 {session.blind && <span className="chip bg-brand-100 text-brand-700 border-brand-200">Blind</span>}
