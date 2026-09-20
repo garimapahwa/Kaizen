@@ -21,7 +21,8 @@ PCOs and label revisions, with the reviewer as the final decision-maker. Built f
   severity, explanation and evidence (file, SHA-256, page, bounding box, raw text).
 - Uses explicit, versioned terminology relationships (global / product-family / SKU, item-anchored) that
   reviewers create, edit, import/export, and that runs pin by version.
-- Holds reviewer identity, slot and blind mode in a **server-side session**, so a second reviewer cannot
+- Signs reviewers in with a BD email address and a password (scrypt), and holds identity, slot and blind
+  mode in a **server-side session**, so a second reviewer cannot
   unblind themselves from the browser, and every decision carries a real name.
 - Supports two reviewers with blind independent review, disagreement detection, finalisation, action items
   and verify-and-close on corrective reruns; suggests new relationships from repeated pairings (human approval
@@ -43,7 +44,7 @@ cd ui && npm install && npm run build && cd ..   # reviewer UI (optional; API wo
 ## Run
 ```bash
 .venv/bin/kaizen run <folder> --out out/myrun   # one SKU set per sub-folder (bom.*, label.pdf, label_old.pdf, drawing.pdf) plus pco/*.xlsx|pdf
-.venv/bin/kaizen serve                          # local API + UI at http://127.0.0.1:8765 (sign in with your name and slot)
+.venv/bin/kaizen serve                          # local API + UI at http://127.0.0.1:8765 (sign up with your BD email, then sign in and pick a slot)
 ```
 Outputs: `run.json` (documents, items, evidence, results, audit), `report.xlsx`. Reviewer decisions,
 terminology and action items live in the workspace database (`./kaizen-workspace/kaizen.db`; change with

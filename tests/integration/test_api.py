@@ -1,13 +1,11 @@
 """API contract used by the reviewer UI. Runs against a temporary workspace; no network."""
 
 import io
-import os
 
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
-import kaizen.api.app as app_module
 from kaizen.api.app import create_app
 from kaizen.datasets.build import build_golden
 from kaizen.workspace import Workspace
@@ -16,24 +14,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 DHARMA = "dharma.reddy@bd.com"
 HEMANT = "hemant@bd.com"
-
-_sent: dict[str, str] = {}
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _otp_harness():
-    """Capture the mailed codes instead of sending them, and lift the per-address send limit: these
-    tests share one workspace and sign the same two reviewers in many times over. The limit itself is
-    tested in tests/integration/test_auth_otp.py."""
-    original, prior = app_module.send_otp_email, os.environ.get("KAIZEN_OTP_RATE_LIMIT")
-    app_module.send_otp_email = lambda to, code: _sent.__setitem__(to, code)
-    os.environ["KAIZEN_OTP_RATE_LIMIT"] = "1000"
-    yield
-    app_module.send_otp_email = original
-    if prior is None:
-        os.environ.pop("KAIZEN_OTP_RATE_LIMIT", None)
-    else:
-        os.environ["KAIZEN_OTP_RATE_LIMIT"] = prior
+PASSWORD = "review-the-boms-2026"
 
 
 @pytest.fixture(scope="module")
@@ -207,12 +188,12 @@ def _fresh(ws):
 
 
 def sign_in(client, email: str, slot: int, blind=None) -> dict:
-    """Through the front door: request a code, then exchange it for a session."""
-    assert client.post("/api/auth/request-otp", json={"email": email}).status_code == 200
-    body = {"email": email, "code": _sent[email], "slot": slot}
+    """Through the front door. The account is created once; 409 afterwards just means it already is."""
+    assert client.post("/api/auth/signup", json={"email": email, "password": PASSWORD}).status_code in (200, 409)
+    body = {"email": email, "password": PASSWORD, "slot": slot}
     if blind is not None:
         body["blind"] = blind
-    r = client.post("/api/auth/verify-otp", json=body)
+    r = client.post("/api/auth/signin", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -227,8 +208,7 @@ def test_session_lifecycle_and_cookie(env):
     assert c.get("/api/sessions/current").json()["session"]["reviewer"] == DHARMA
     assert c.delete("/api/sessions/current").json()["ended"] is True
     assert c.get("/api/sessions/current").json()["session"] is None
-    assert c.post("/api/auth/request-otp", json={"email": DHARMA}).status_code == 200
-    assert c.post("/api/auth/verify-otp", json={"email": DHARMA, "code": _sent[DHARMA], "slot": 7}).status_code == 400
+    assert c.post("/api/auth/signin", json={"email": DHARMA, "password": PASSWORD, "slot": 7}).status_code == 400
 
 
 def test_review_endpoints_refuse_an_anonymous_caller(env):

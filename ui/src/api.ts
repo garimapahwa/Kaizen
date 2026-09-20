@@ -146,12 +146,12 @@ export const api = {
   bulkAccept: (runId: string) => request<{ accepted: number }>(`/api/runs/${enc(runId)}/bulk-accept`, json("POST", {})),
 
   // ---- reviewer session: identity, slot and blind mode are held by the server
-  // Signing in is two calls: the server mails a code to a BD address, then the code buys a session.
-  // The code never travels back in a response, so this client can only ever echo what the user typed.
+  // Sign-up creates the account; sign-in exchanges the password for a session. The password is only
+  // ever sent, never stored or echoed here — the session lives in an HttpOnly cookie this code cannot read.
   currentSession: () => request<CurrentSession>("/api/sessions/current"),
-  requestOtp: (email: string) => request<{ ok: boolean }>("/api/auth/request-otp", json("POST", { email })),
-  verifyOtp: (email: string, code: string, slot: 1 | 2, blind?: boolean) =>
-    request<ReviewSession>("/api/auth/verify-otp", json("POST", { email, code, slot, blind })),
+  signUp: (email: string, password: string) => request<{ ok: boolean; email: string }>("/api/auth/signup", json("POST", { email, password })),
+  signIn: (email: string, password: string, slot: 1 | 2, blind?: boolean) =>
+    request<ReviewSession>("/api/auth/signin", json("POST", { email, password, slot, blind })),
   signOut: () => request<{ ended: boolean }>("/api/sessions/current", { method: "DELETE" }),
   relationshipFromRow: (runId: string, body: FromRowBody) => request<Relationship>(`/api/runs/${enc(runId)}/relationships/from-row`, json("POST", body)),
 

@@ -1,34 +1,44 @@
 # Kaizen Cross-Check — local API contract (for the reviewer UI)
 
 Base URL when running `kaizen serve`: `http://127.0.0.1:8765`. All endpoints are local. JSON unless stated.
-Errors: 400 (invalid input), 401 (no review session, or a bad code), 403 (refused for a blind reviewer),
-404 (unknown id), 429 (too many codes for one address), 502 (the server cannot send mail).
+Errors: 400 (invalid input), 401 (no review session, or bad credentials), 403 (refused for a blind
+reviewer), 404 (unknown id), 409 (account exists), 429 (locked out after repeated failures).
 
-## Signing in (email one-time code)
-A session can only be opened by someone who received a code at an allowed email address. Sign-in is two
-calls: the server mails a six-digit code, then the code is exchanged for a session. The code is stored
-only as a SHA-256 hash, expires after 10 minutes, works once, and dies after 5 wrong guesses.
+## Signing in (email and password)
+A session can only be opened by someone holding an account on an allowed email address. Reviewers sign
+themselves up; passwords are stored as salted scrypt, never in plaintext and never recoverable.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/api/auth/request-otp` | `{email}` | `{ok: true}` — always the same response, whoever the address belongs to |
-| POST | `/api/auth/verify-otp` | `{email, code, slot:1\|2, blind?}` | `{reviewer, slot, blind, created_at, blind_review_policy}` + `Set-Cookie` |
+| POST | `/api/auth/signup` | `{email, password}` | `{ok: true, email}` |
+| POST | `/api/auth/signin` | `{email, password, slot:1\|2, blind?}` | `{reviewer, slot, blind, created_at, blind_review_policy}` + `Set-Cookie` |
 
 The address must end in a whole allowed domain — `bd.com` by default, so `user@gmail.com` and
-`user@bd.com.evil.io` are both **400** `Only BD email addresses can sign in.` A wrong, expired, reused or
-exhausted code is **401** `Invalid or expired code.`; a fourth code inside ten minutes for one address is
-**429**. The verified address becomes the reviewer's identity: it is what decisions, exports, certificates
-and the audit trail are recorded against.
+`user@bd.com.evil.io` are both **400** `Only BD email addresses can sign in.` A password shorter than 10
+characters is **400**; an address that already has an account is **409**.
+
+Sign-in returns **401** `That email address and password do not match an account.` for both a wrong
+password and an unknown address — the difference would report which BD addresses have accounts here.
+After 10 consecutive failures the account is refused with **429** for 15 minutes; the lockout expires on
+its own, so nobody has to unlock it. The verified address becomes the reviewer's identity: it is what
+decisions, exports, certificates and the audit trail are recorded against.
+
+### Forgotten passwords
+There is no reset email — the tool has no mail server. An administrator clears the account from the
+command line and the reviewer signs up again with a password of their own choosing:
+
+```
+kaizen users list
+kaizen users reset dharma.reddy@bd.com
+```
+
+Clearing an account does not touch decisions already recorded: those carry the address, not a row in the
+accounts table.
 
 ### Environment
 | Variable | Purpose |
 |---|---|
 | `KAIZEN_ALLOWED_DOMAINS` | Comma-separated domains that may sign in. Default `bd.com`. |
-| `KAIZEN_SMTP_HOST`, `KAIZEN_SMTP_PORT` | Mail server; port defaults to 587. STARTTLS is always used. |
-| `KAIZEN_SMTP_USER`, `KAIZEN_SMTP_PASSWORD` | SMTP credentials. Omit both for an unauthenticated relay. |
-| `KAIZEN_SMTP_FROM` | Envelope sender. Required — without it `request-otp` returns 502. |
-| `KAIZEN_OTP_DEV_MODE=1` | Demos and tests: log the code instead of mailing it, and reopen `POST /api/sessions`. Never set it on a shared deployment. |
-| `KAIZEN_OTP_RATE_LIMIT` | Codes per address per 10 minutes. Default 3. |
 
 ## Reviewer sessions
 Reviewer identity, slot and blind mode are held by the server, not by the client. The session token is
@@ -37,7 +47,7 @@ returned in an HttpOnly cookie (`kaizen_session`), so page scripts cannot read o
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/api/sessions` | `{reviewer, slot:1\|2, blind?}` | **403** `Use /api/auth/verify-otp` unless `KAIZEN_OTP_DEV_MODE=1`. Superseded by the OTP flow above. |
+| POST | `/api/sessions` | | **403** `Use /api/auth/signin`. Superseded by the sign-in flow above; there is no bypass. |
 | GET | `/api/sessions/current` | | `{session: {...}\|null, blind_review_policy}` |
 | DELETE | `/api/sessions/current` | | `{ended: bool}` and clears the cookie |
 

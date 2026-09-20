@@ -309,9 +309,12 @@ in the workbook and the UI, so the tool states plainly what it does and does not
 
 ### Reviewer sessions and blind mode
 
-Identity, slot and blind mode are server-side (`review/sessions.py`). `POST /api/sessions` issues an opaque
-token in an HttpOnly cookie; page scripts cannot read or forge it. The `viewer` and `blind` query
-parameters are ignored whenever a session exists.
+Identity, slot and blind mode are server-side (`review/sessions.py`). Reviewers sign up with a BD email
+address and a password (stored as salted scrypt in the `users` table); `POST /api/auth/signin` is the only
+route that opens a session and issues an opaque token in an HttpOnly cookie, so page scripts cannot read or
+forge it. The `viewer` and `blind` query parameters are ignored whenever a session exists. A forgotten
+password is cleared by an administrator (`kaizen users reset`), after which the reviewer signs up again —
+there is no reset email because the tool has no mail server.
 
 The **blind flag is derived, not requested**. Reviewer 1 is never blind. Reviewer 2 is always blind while
 the workspace policy is `required`, which is the default, and may only be unblinded when the policy is
@@ -472,7 +475,7 @@ The complete `Run` model: every document, item, evidence record, result and audi
 
 | Group | Endpoints |
 |---|---|
-| Sessions | `POST /api/sessions`, `GET`/`DELETE /api/sessions/current` |
+| Auth and sessions | `POST /api/auth/signup`, `POST /api/auth/signin`, `GET`/`DELETE /api/sessions/current` |
 | Runs | health, list, create from a local path, create from an upload, load the demo, get a summary |
 | Results | filtered and ordered result page, row detail with evidence and history |
 | Documents | document list, extracted items, page PNG with the evidence box highlighted |

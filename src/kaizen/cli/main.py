@@ -24,10 +24,12 @@ dataset_app = typer.Typer(help="Synthetic golden dataset commands.", no_args_is_
 terminology_app = typer.Typer(help="Terminology relationships: explicit, versioned business rules.", no_args_is_help=True)
 runs_app = typer.Typer(help="Runs recorded in the workspace.", no_args_is_help=True)
 review_app = typer.Typer(help="Review policy and open reviewer sessions.", no_args_is_help=True)
+users_app = typer.Typer(help="Reviewer accounts. Reviewers sign themselves up; this is how an account is cleared.", no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
 app.add_typer(terminology_app, name="terminology")
 app.add_typer(runs_app, name="runs")
 app.add_typer(review_app, name="review")
+app.add_typer(users_app, name="users")
 console = Console()
 
 
@@ -428,6 +430,43 @@ def review_sessions(ctx: typer.Context, end: Optional[str] = typer.Option(None, 
     for s in active:
         typer.echo(f"{s.reviewer:<20} slot {s.slot}  blind {'yes' if s.blind else 'no ':<3}  opened {s.created_at}")
     typer.echo(f"{len(active)} open session(s)")
+
+
+@users_app.command("list")
+def users_list(ctx: typer.Context) -> None:
+    """Reviewer accounts in this workspace."""
+    from kaizen.review.sessions import UserStore
+
+    accounts = UserStore(_ws(ctx).db).list()
+    for u in accounts:
+        state = f"locked until {u.locked_until}" if u.locked_until else "active"
+        typer.echo(f"{u.email:<34} created {u.created_at[:19]}  {state}")
+    typer.echo(f"{len(accounts)} account(s)")
+
+
+@users_app.command("reset")
+def users_reset(
+    ctx: typer.Context,
+    email: Annotated[str, typer.Argument(help="The reviewer's BD email address.")],
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+) -> None:
+    """Clear an account so the reviewer can sign up again and choose a new password.
+
+    This is the forgotten-password path. There is no reset email because the tool has no mail server;
+    clearing the account instead of setting a password for them means nobody else ever learns it.
+    Decisions already recorded keep the reviewer's address and are untouched.
+    """
+    from kaizen.review.sessions import UserStore
+
+    users = UserStore(_ws(ctx).db)
+    address = email.strip().lower()
+    if not users.exists(address):
+        console.print(f"[yellow]No account for {address}.[/yellow] They can sign up directly.")
+        raise typer.Exit(code=1)
+    if not yes:
+        typer.confirm(f"Clear the account for {address} so they can sign up again?", abort=True)
+    users.delete(address, by="cli")
+    console.print(f"Cleared [bold]{address}[/bold]. Ask them to sign up again and choose a new password.")
 
 
 @runs_app.command("list")
