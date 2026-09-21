@@ -1,8 +1,8 @@
 // Sign-in gate, with sign-up beside it. Reviewers identify themselves before they can see or record
 // decisions: every decision is stored against a BD email address, and blind review only means something
-// if the server decides who is blind. Forgotten passwords are cleared by an administrator
-// (`kaizen users reset`), after which the reviewer signs up again — there is no mail server to send a
-// reset link from.
+// if the server decides who is blind. No email is ever sent (BD mail blocks external senders), so a
+// forgotten password is handled by an administrator: with local accounts they clear it (`kaizen users
+// reset`) and the reviewer signs up again; with Supabase accounts they set a new one in Supabase.
 import { Eye, EyeSlash, UserCircle, UsersThree } from "@phosphor-icons/react";
 import { useState } from "react";
 import { useReviewer } from "../lib/reviewer";
@@ -36,7 +36,7 @@ function PasswordInput({ id, value, onChange, autoComplete }: { id: string; valu
 }
 
 export function SignIn() {
-  const { signUp, signIn, policy, error } = useReviewer();
+  const { signUp, signIn, policy, error, accounts } = useReviewer();
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -210,7 +210,13 @@ export function SignIn() {
         </div>
         {mode === "signin" && (
           <p className="mt-3 text-2xs text-ink-3 text-center leading-relaxed">
-            Forgotten your password? Ask whoever runs this workspace to clear your account with <span className="mono">kaizen users reset</span>, then create it again.
+            {accounts === "supabase" ? (
+              "Forgotten your password? Ask the Kaizen admin to set a new one for you."
+            ) : (
+              <>
+                Forgotten your password? Ask whoever runs this workspace to clear your account with <span className="mono">kaizen users reset</span>, then create it again.
+              </>
+            )}
           </p>
         )}
       </form>

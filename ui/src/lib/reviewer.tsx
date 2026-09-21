@@ -4,13 +4,15 @@
 // therefore cannot be switched off from the browser — that is the whole point. See docs/security-review.md.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
-import type { ReviewSession, ViewerParams } from "../types";
+import type { AccountsBackend, ReviewSession, ViewerParams } from "../types";
 
 interface Ctx {
   session: ReviewSession | null;
   policy: string;
   loading: boolean;
   error: string | null;
+  /** Where passwords are checked: this workspace ("local") or Supabase. Decides the forgotten-password advice. */
+  accounts: AccountsBackend;
   /** Create an account for a BD address. Does not sign in: the slot is chosen on sign-in. */
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string, slot: 1 | 2, blind?: boolean) => Promise<void>;
@@ -28,6 +30,7 @@ export function ReviewerProvider({ children }: { children: ReactNode }) {
   const [policy, setPolicy] = useState<string>("required");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<AccountsBackend>("local");
 
   useEffect(() => {
     let live = true;
@@ -37,6 +40,7 @@ export function ReviewerProvider({ children }: { children: ReactNode }) {
         if (!live) return;
         setSession(r.session);
         setPolicy(r.blind_review_policy);
+        setAccounts(r.accounts ?? "local");
       })
       .catch((e: Error) => live && setError(e.message))
       .finally(() => live && setLoading(false));
@@ -68,13 +72,14 @@ export function ReviewerProvider({ children }: { children: ReactNode }) {
       policy,
       loading,
       error,
+      accounts,
       signUp,
       signIn,
       signOut,
       viewerParams: { viewer: session?.slot ?? 1, blind: session?.blind ?? false },
       name: session?.reviewer ?? "",
     }),
-    [session, policy, loading, error, signUp, signIn, signOut],
+    [session, policy, loading, error, accounts, signUp, signIn, signOut],
   );
   return <ReviewerContext.Provider value={value}>{children}</ReviewerContext.Provider>;
 }

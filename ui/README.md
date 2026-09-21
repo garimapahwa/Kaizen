@@ -18,10 +18,13 @@ Open http://localhost:5173, create an account with any `@bd.com` address, sign i
 ## Signing in
 
 Reviewers sign themselves up with a BD email address and a password (`POST /api/auth/signup`), then sign
-in and pick a reviewer slot (`POST /api/auth/signin`) — see `docs/api-contract.md`. Passwords are stored
-as salted scrypt and are never recoverable, so a forgotten password is cleared by an administrator with
-`kaizen users reset <email>`; the reviewer then signs up again and chooses a new one. There is no reset
-email because the tool has no mail server.
+in and pick a reviewer slot (`POST /api/auth/signin`) — see `docs/api-contract.md`. `GET
+/api/sessions/current` says where accounts live (`accounts: "local" | "supabase"`):
+
+- **local**: a forgotten password is cleared by an administrator with `kaizen users reset <email>`, and
+  the reviewer signs up again.
+- **supabase**: one account works on every laptop. No email is sent, so the sign-in page tells a reviewer
+  who forgot their password to ask the Kaizen admin, who sets a new one in Supabase.
 
 A session is still what the backend enforces: identity, slot and blind mode live in the `kaizen_session`
 HttpOnly cookie, unreadable here.

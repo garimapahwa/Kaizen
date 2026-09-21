@@ -21,10 +21,11 @@ from kaizen.reporting.certificate import write_certificate, write_run_certificat
 from kaizen.reporting.excel import ReviewBundle, export_with_review
 from kaizen.reporting.excel_import import import_decisions
 from kaizen.review.action_items import ActionItemStore
+from kaizen.review.auth import AuthError, LocalAccounts, SupabaseAccounts, accounts_for
 from kaizen.review.business import BusinessAssumptions, business_case
 from kaizen.review.mining import approve_suggestion, mine_suggestions, reject_suggestion, terminology_worklist
 from kaizen.review.rundiff import diff_runs
-from kaizen.review.sessions import POLICY_REQUIRED, ReviewSession, SessionStore, UserStore
+from kaizen.review.sessions import POLICY_REQUIRED, ReviewSession, SessionStore
 from kaizen.review.store import ReviewStore
 from kaizen.terminology.exchange import export_xlsx, import_csv, import_xlsx
 from kaizen.workspace import Workspace
@@ -36,7 +37,6 @@ BLIND_REFUSAL = "Not available while you are reviewing blind: it would reveal re
 # ---- sign-in -----------------------------------------------------------------------------------
 ALLOWED_EMAIL_DOMAINS = {"bd.com"}
 BAD_DOMAIN = "Only BD email addresses can sign in."
-BAD_CREDENTIALS = "That email address and password do not match an account."
 
 
 def _allowed_domains() -> set[str]:
@@ -128,14 +128,16 @@ def _queue_sort_key(r):
     return (SEVERITY_RANK[sev], 0 if "AMBIGUOUS_MATCH" in types else 1, 0 if r.classification is Classification.POTENTIAL else 1, 0 if "LOW_EXTRACTION_CONFIDENCE" in types else 1, r.sku, r.row_id)
 
 
-def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None) -> FastAPI:
+def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None, accounts: LocalAccounts | SupabaseAccounts | None = None) -> FastAPI:
     ws = workspace or Workspace.resolve(None)
     app = FastAPI(title="Kaizen Cross-Check", version=__version__)
     cache = RunCache(ws)
     review = ReviewStore(ws.db)
     items = ActionItemStore(ws.db)
     sessions = SessionStore(ws.db)
-    users = UserStore(ws.db)
+    # Where email + password are checked: this workspace, or Supabase (see kaizen.review.auth). Only the
+    # credentials move; sessions, slots, blind mode and decisions always stay in the workspace.
+    accounts = accounts or accounts_for(ws.db)
 
     # ---- reviewer sessions --------------------------------------------------------------------
     # Identity, slot and blind mode are server-side. The token lives in an HttpOnly cookie so page
@@ -184,28 +186,23 @@ def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None) -
 
     @app.post("/api/auth/signup")
     def signup(payload: dict = Body(...)):
-        """Create an account for a BD address. Open registration: the domain is a format check, not
-        proof of employment — see docs/security-review.md."""
+        """Create an account for a BD address. Open registration: the domain is a format check, not proof
+        of employment — see docs/security-review.md."""
         email = _bd_email(payload.get("email", ""))
         try:
-            users.create(email, str(payload.get("password", "")))
-        except KeyError:
-            raise HTTPException(409, "An account already exists for that address. Sign in instead, or ask an administrator to reset it.")
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+            accounts.sign_up(email, str(payload.get("password", "")))
+        except AuthError as e:
+            raise HTTPException(e.status, e.message)
         return {"ok": True, "email": email}
 
     @app.post("/api/auth/signin")
     def signin(response: FastResponse, payload: dict = Body(...)):
         """Exchange an email and password for a review session, which carries the slot and blind flag."""
         email = _bd_email(payload.get("email", ""))
-        locked = users.locked_seconds(email)
-        if locked:
-            raise HTTPException(429, f"Too many failed attempts. Try again in {max(1, locked // 60)} minute(s).")
-        if not users.verify(email, str(payload.get("password", ""))):
-            # One message for "no such account" and "wrong password": the difference would tell an
-            # outsider which BD addresses have accounts here.
-            raise HTTPException(401, BAD_CREDENTIALS)
+        try:
+            accounts.sign_in(email, str(payload.get("password", "")))
+        except AuthError as e:
+            raise HTTPException(e.status, e.message)
         return _start_session(response, email, payload)
 
     # ---- runs ---------------------------------------------------------------------------------
@@ -216,7 +213,7 @@ def create_app(workspace: Workspace | None = None, ui_dir: Path | None = None) -
 
     @app.get("/api/sessions/current")
     def current_session(session: ReviewSession | None = Depends(_open_session)):
-        return {"session": session.to_dict(sessions.policy()) if session else None, "blind_review_policy": sessions.policy()}
+        return {"session": session.to_dict(sessions.policy()) if session else None, "blind_review_policy": sessions.policy(), "accounts": accounts.name}
 
     @app.delete("/api/sessions/current")
     def end_session(response: FastResponse, kaizen_session: str | None = Cookie(default=None)):

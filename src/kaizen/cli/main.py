@@ -25,7 +25,9 @@ terminology_app = typer.Typer(help="Terminology relationships: explicit, version
 runs_app = typer.Typer(help="Runs recorded in the workspace.", no_args_is_help=True)
 review_app = typer.Typer(help="Review policy and open reviewer sessions.", no_args_is_help=True)
 users_app = typer.Typer(help="Reviewer accounts. Reviewers sign themselves up; this is how an account is cleared.", no_args_is_help=True)
+auth_app = typer.Typer(help="Where sign-in accounts live: this workspace (default) or a Supabase project.", no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
+app.add_typer(auth_app, name="auth")
 app.add_typer(terminology_app, name="terminology")
 app.add_typer(runs_app, name="runs")
 app.add_typer(review_app, name="review")
@@ -432,11 +434,75 @@ def review_sessions(ctx: typer.Context, end: Optional[str] = typer.Option(None, 
     typer.echo(f"{len(active)} open session(s)")
 
 
+def _local_accounts_only(ctx: typer.Context) -> None:
+    """`users` commands manage local accounts; with Supabase the accounts are in its dashboard."""
+    from kaizen.review.auth import SupabaseAccounts, accounts_for
+
+    try:
+        backend = accounts_for(_ws(ctx).db)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    if isinstance(backend, SupabaseAccounts):
+        console.print(f"Accounts are in Supabase ({backend.url}). Manage them in the Supabase dashboard (Authentication → Users). To set a new password for someone, see “Forgotten passwords” in the README.")
+        raise typer.Exit(code=1)
+
+
+@auth_app.command("show")
+def auth_show(ctx: typer.Context) -> None:
+    """Where accounts are checked, and where that setting comes from."""
+    from kaizen.review.auth import env_config, saved_config
+
+    db = _ws(ctx).db
+    try:
+        env = env_config()
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    saved = saved_config(db)
+    if env:
+        typer.echo(f"Accounts: Supabase at {env[0]} (from KAIZEN_SUPABASE_URL / KAIZEN_SUPABASE_KEY)")
+        if saved:
+            typer.echo(f"  (the workspace also has {saved[0]} saved; the environment wins)")
+    elif saved:
+        typer.echo(f"Accounts: Supabase at {saved[0]} (saved in this workspace)")
+    else:
+        typer.echo("Accounts: local, in this workspace's database. Use `kaizen auth supabase <url> <key>` to share them through Supabase.")
+
+
+@auth_app.command("supabase")
+def auth_supabase(
+    ctx: typer.Context,
+    url: Annotated[str, typer.Argument(help="Project URL, e.g. https://abcdefgh.supabase.co (Project Settings → API).")],
+    key: Annotated[str, typer.Argument(help="The anon / publishable key. Never the service_role / secret key.")],
+) -> None:
+    """Check emails and passwords with a Supabase project. Only accounts move; all review data stays here.
+
+    Run once per laptop. Restart `kaizen serve` afterwards.
+    """
+    from kaizen.review.auth import save_config
+
+    try:
+        url, _ = save_config(_ws(ctx).db, url, key, by="cli")
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    console.print(f"Accounts will be checked by Supabase at [bold]{url}[/bold]. Restart `kaizen serve` for it to take effect.")
+    console.print("Accounts created before this in the workspace are not copied: each reviewer signs up once in Supabase.")
+
+
+@auth_app.command("local")
+def auth_local(ctx: typer.Context) -> None:
+    """Go back to accounts stored in this workspace (works offline). Restart `kaizen serve` afterwards."""
+    from kaizen.review.auth import clear_config
+
+    clear_config(_ws(ctx).db, by="cli")
+    console.print("Accounts are local to this workspace again. Restart `kaizen serve` for it to take effect.")
+
+
 @users_app.command("list")
 def users_list(ctx: typer.Context) -> None:
     """Reviewer accounts in this workspace."""
     from kaizen.review.sessions import UserStore
 
+    _local_accounts_only(ctx)
     accounts = UserStore(_ws(ctx).db).list()
     for u in accounts:
         state = f"locked until {u.locked_until}" if u.locked_until else "active"
@@ -458,6 +524,7 @@ def users_reset(
     """
     from kaizen.review.sessions import UserStore
 
+    _local_accounts_only(ctx)
     users = UserStore(_ws(ctx).db)
     address = email.strip().lower()
     if not users.exists(address):
@@ -502,8 +569,14 @@ def serve(
     from kaizen.api.app import create_app
 
     ui_dir = ui or Path(__file__).resolve().parents[3] / "ui" / "dist"
-    application = create_app(_ws(ctx), ui_dir if ui_dir.exists() else None)
-    typer.echo(f"Kaizen Cross-Check API on http://{host}:{port}  (workspace {_ws(ctx).path}; UI {'served' if ui_dir.exists() else 'not built — API only'})")
+    try:
+        application = create_app(_ws(ctx), ui_dir if ui_dir.exists() else None)
+    except ValueError as e:  # a half-set or unusable Supabase configuration
+        raise typer.BadParameter(f"sign-in configuration: {e}. See `kaizen auth show`.")
+    from kaizen.review.auth import accounts_for
+
+    where = accounts_for(_ws(ctx).db).name  # already validated by create_app
+    typer.echo(f"Kaizen Cross-Check API on http://{host}:{port}  (workspace {_ws(ctx).path}; accounts {where}; UI {'served' if ui_dir.exists() else 'not built — API only'})")
     uvicorn.run(application, host=host, port=port, log_level="warning")
 
 

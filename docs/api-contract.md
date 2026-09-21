@@ -2,16 +2,27 @@
 
 Base URL when running `kaizen serve`: `http://127.0.0.1:8765`. All endpoints are local. JSON unless stated.
 Errors: 400 (invalid input), 401 (no review session, or bad credentials), 403 (refused for a blind
-reviewer), 404 (unknown id), 409 (account exists), 429 (locked out after repeated failures).
+reviewer, or a Supabase account stuck waiting for email confirmation), 404 (unknown id), 409 (account
+exists), 429 (locked out after repeated failures, or Supabase rate limits), 503 (Supabase unreachable or
+misconfigured).
 
 ## Signing in (email and password)
 A session can only be opened by someone holding an account on an allowed email address. Reviewers sign
-themselves up; passwords are stored as salted scrypt, never in plaintext and never recoverable.
+themselves up. Accounts live in one of two places (see `kaizen auth show`):
+
+- **local** (default, works offline): in the workspace database, passwords as salted scrypt.
+- **Supabase**: in a Supabase project, so one account works on every laptop. Only the email and password
+  go to Supabase; the session, slot, blind mode and all review data stay in the local workspace. No email
+  is sent (BD mail blocks external senders), so the project runs with "Confirm email" off.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | POST | `/api/auth/signup` | `{email, password}` | `{ok: true, email}` |
 | POST | `/api/auth/signin` | `{email, password, slot:1\|2, blind?}` | `{reviewer, slot, blind, created_at, blind_review_policy}` + `Set-Cookie` |
+
+If the Supabase project still has "Confirm email" on, sign-up is **503** with an explanation (the
+confirmation email would never arrive), and an account created that way signs in with **403** until an
+admin confirms it in the dashboard.
 
 The address must end in a whole allowed domain — `bd.com` by default, so `user@gmail.com` and
 `user@bd.com.evil.io` are both **400** `Only BD email addresses can sign in.` A password shorter than 10
@@ -19,13 +30,15 @@ characters is **400**; an address that already has an account is **409**.
 
 Sign-in returns **401** `That email address and password do not match an account.` for both a wrong
 password and an unknown address — the difference would report which BD addresses have accounts here.
-After 10 consecutive failures the account is refused with **429** for 15 minutes; the lockout expires on
-its own, so nobody has to unlock it. The verified address becomes the reviewer's identity: it is what
+With local accounts, after 10 consecutive failures the account is refused with **429** for 15 minutes;
+the lockout expires on its own, so nobody has to unlock it. With Supabase, its own rate limits apply
+(also **429**). The verified address becomes the reviewer's identity: it is what
 decisions, exports, certificates and the audit trail are recorded against.
 
 ### Forgotten passwords
-There is no reset email — the tool has no mail server. An administrator clears the account from the
-command line and the reviewer signs up again with a password of their own choosing:
+There is no reset email. With Supabase accounts the admin sets a new password in the Supabase dashboard
+(README, "Forgotten passwords") and tells the reviewer. With local accounts an administrator clears the
+account from the command line and the reviewer signs up again with a password of their own choosing:
 
 ```
 kaizen users list
@@ -39,6 +52,7 @@ accounts table.
 | Variable | Purpose |
 |---|---|
 | `KAIZEN_ALLOWED_DOMAINS` | Comma-separated domains that may sign in. Default `bd.com`. |
+| `KAIZEN_SUPABASE_URL`, `KAIZEN_SUPABASE_KEY` | Check accounts with this Supabase project (anon / publishable key only). Overrides `kaizen auth supabase`. Set both or neither. |
 
 ## Reviewer sessions
 Reviewer identity, slot and blind mode are held by the server, not by the client. The session token is
@@ -48,7 +62,7 @@ returned in an HttpOnly cookie (`kaizen_session`), so page scripts cannot read o
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | POST | `/api/sessions` | | **403** `Use /api/auth/signin`. Superseded by the sign-in flow above; there is no bypass. |
-| GET | `/api/sessions/current` | | `{session: {...}\|null, blind_review_policy}` |
+| GET | `/api/sessions/current` | | `{session: {...}\|null, blind_review_policy, accounts: "local"\|"supabase"}` |
 | DELETE | `/api/sessions/current` | | `{ended: bool}` and clears the cookie |
 
 `blind` is decided by the server: reviewer 1 is never blind; reviewer 2 is always blind while the

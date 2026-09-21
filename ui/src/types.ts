@@ -229,9 +229,13 @@ export interface ReviewSession {
   blind_review_policy: string;
 }
 
+/** Where emails and passwords are checked: this workspace, or a Supabase project shared by every laptop. */
+export type AccountsBackend = "local" | "supabase";
+
 export interface CurrentSession {
   session: ReviewSession | null;
   blind_review_policy: string;
+  accounts: AccountsBackend;
 }
 
 export interface BBox {

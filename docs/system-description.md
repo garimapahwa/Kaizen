@@ -310,11 +310,20 @@ in the workbook and the UI, so the tool states plainly what it does and does not
 ### Reviewer sessions and blind mode
 
 Identity, slot and blind mode are server-side (`review/sessions.py`). Reviewers sign up with a BD email
-address and a password (stored as salted scrypt in the `users` table); `POST /api/auth/signin` is the only
-route that opens a session and issues an opaque token in an HttpOnly cookie, so page scripts cannot read or
-forge it. The `viewer` and `blind` query parameters are ignored whenever a session exists. A forgotten
-password is cleared by an administrator (`kaizen users reset`), after which the reviewer signs up again —
-there is no reset email because the tool has no mail server.
+address and a password; `POST /api/auth/signin` is the only route that opens a session and issues an
+opaque token in an HttpOnly cookie, so page scripts cannot read or forge it. The `viewer` and `blind`
+query parameters are ignored whenever a session exists.
+
+Where the password is checked is chosen by `review/auth.py`. By default accounts are **local**: salted
+scrypt in the `users` table, a 15-minute lockout after ten failures, and a forgotten password cleared by
+an administrator (`kaizen users reset`), after which the reviewer signs up again. Alternatively accounts
+live in a **Supabase** project (`kaizen auth supabase <url> <key>`, or `KAIZEN_SUPABASE_URL` and
+`KAIZEN_SUPABASE_KEY`), so one account works on every laptop. Then only the email and password go to
+Supabase Auth, over its HTTP API with the standard library, and a successful sign-in opens the same local
+session. No email is sent, because BD mail blocks external senders: the project runs with "Confirm email"
+off, and an admin sets a forgotten password in the Supabase dashboard. The key must be the anon /
+publishable key: a service_role / secret key is refused. A half-set configuration stops the server rather
+than silently falling back to local accounts.
 
 The **blind flag is derived, not requested**. Reviewer 1 is never blind. Reviewer 2 is always blind while
 the workspace policy is `required`, which is the default, and may only be unblinded when the policy is
@@ -337,9 +346,10 @@ The engine's own recommendation stays fully visible throughout: blind review hid
 the evidence. Once reviewer 2 records their decision, everything becomes visible and the row state resolves
 to AGREED or DISAGREEMENT.
 
-This is identification, not authentication. Anyone with access to the machine can sign in under any name.
-It makes the reviewer's identity and the blind flag server-side, explicit and audited, which is what an
-independent-review process needs on a single reviewer workstation. A shared deployment needs SSO.
+Sign-in proves the reviewer knows the password for that address. Registration is open in both modes,
+and the domain check does not prove the address belongs to the person signing up (that would need an
+email, which BD mail does not accept from outside). A company-wide deployment should use BD's single
+sign-on.
 
 ### Measured review effort (`review/store.py`, `review/business.py`)
 
@@ -644,7 +654,8 @@ migrations for columns added after the first release.
 | `action_items` | Items with owner, status, comparison key and resolution time |
 | `mining_rejections` | Suggestions a reviewer has declined |
 | `sessions` | Open review sessions: reviewer, slot, blind flag, timestamps |
-| `settings` | Workspace policy, currently the blind-review setting |
+| `users` | Local accounts: email, scrypt hash, failed attempts, lockout (unused when accounts are in Supabase) |
+| `settings` | Workspace policy: the blind-review setting and, when set, the Supabase URL and anon key |
 | `row_views` | When each reviewer slot last opened a row (the start of the effort clock) |
 | `audit` | Every action with actor, timestamp and detail |
 
@@ -683,7 +694,8 @@ under a lock, verified by a 25-thread test. Full review, including the accepted 
 The honest list lives in [`known-limitations.md`](known-limitations.md). The headline items: no OCR for
 scanned BOMs or drawings and no hand-drawn redlines; truncated JDE descriptions are matched by similarity
 rather than a prefix rule; thresholds were tuned on synthetic data; sign-in identifies rather than
-authenticates; the workspace is single-user; case labels are not parsed.
+does not prove ownership of the email address; review data is per workspace, not shared between
+laptops; case labels are not parsed.
 
 The single largest risk is that every accuracy figure in this document was measured on synthetic documents.
 The parsers have never seen a real JDE print or MasterControl label.

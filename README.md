@@ -21,7 +21,8 @@ PCOs and label revisions, with the reviewer as the final decision-maker. Built f
   severity, explanation and evidence (file, SHA-256, page, bounding box, raw text).
 - Uses explicit, versioned terminology relationships (global / product-family / SKU, item-anchored) that
   reviewers create, edit, import/export, and that runs pin by version.
-- Signs reviewers in with a BD email address and a password (scrypt), and holds identity, slot and blind
+- Signs reviewers in with a BD email address and a password (scrypt in the workspace, or optionally a
+  shared Supabase project so one account works on every laptop), and holds identity, slot and blind
   mode in a **server-side session**, so a second reviewer cannot
   unblind themselves from the browser, and every decision carries a real name.
 - Supports two reviewers with blind independent review, disagreement detection, finalisation, action items
@@ -75,6 +76,8 @@ rm -rf kaizen-workspace
 | `diff <before.json> <after.json> [--json]` | Resolved, new and still-open discrepancies between two runs. |
 | `review import <run.json> <file.xlsx> --slot --reviewer [--dry-run] [--force]` | Optional Excel round-trip: apply decisions recorded in the exported workbook. |
 | `review policy [--set required\|optional]`, `review sessions [--end <name>]` | Blind-review policy (server-side, never changeable from the UI); open reviewer sessions. |
+| `auth show`, `auth supabase <url> <key>`, `auth local` | Where sign-in accounts are checked: this workspace (default) or a shared Supabase project. |
+| `users list`, `users reset <email>` | Local accounts only: list them; clear one so the reviewer can sign up again. |
 | `runs list`, `runs relationships <run>` | Runs in the workspace; reconstruct the exact relationship versions a run used. |
 | `dataset build`, `dataset corrected <sku>` | Regenerate the synthetic golden dataset (byte-stable); write a corrected copy of one SKU set for rehearsing verify-and-close. |
 
@@ -99,6 +102,43 @@ Details and the full diagram: `docs/final-architecture.md`. API contract: `docs/
 ## Limitations
 See `docs/known-limitations.md`. Headline items: no scanned-BOM OCR, no hand-drawn redlines, case labels not
 parsed, thresholds tuned on synthetic data, single-user local workspace, no compliance claim.
+
+## Optional: shared sign-in with Supabase
+By default accounts live in each laptop's workspace, so an account made on one laptop does not work on
+another. To give each reviewer one account that works on every laptop, keep the accounts in a Supabase
+project. **Only the email address and password go to Supabase.** Sessions, reviewer slots, blind mode,
+decisions, runs and documents stay on the laptop, as before. Sign-in then needs internet access.
+**No email is ever sent**: BD mail blocks external senders, so there are no confirmation or reset emails.
+
+In the Supabase dashboard (once per project):
+1. **Authentication → Sign In / Providers:** keep *Allow new users to sign up* on and turn **Confirm
+   email off** (a confirmation email would never arrive, and the account could not sign in).
+   Optionally set the email provider's *Minimum password length* to 10, to match Kaizen.
+2. Copy the **Project URL** and the **anon / publishable** key (Project Settings → API Keys). Never use
+   the `service_role` / secret key; Kaizen refuses it.
+
+Then on each laptop (once):
+```bash
+.venv/bin/kaizen auth supabase https://<project>.supabase.co <anon-or-publishable-key>
+.venv/bin/kaizen auth show      # confirms where accounts are checked; `kaizen auth local` switches back
+```
+The environment variables `KAIZEN_SUPABASE_URL` and `KAIZEN_SUPABASE_KEY` do the same and take
+precedence. Accounts created locally beforehand are not copied: each reviewer signs up once. Accounts are
+listed in the dashboard under Authentication → Users. Kaizen only lets `@bd.com` addresses in; anyone
+holding the public key could create a non-BD account directly in Supabase, but it cannot sign in to Kaizen.
+
+### Forgotten passwords (Supabase)
+The admin sets a new password and tells the reviewer. In the Supabase dashboard open **SQL Editor**, run
+this with the reviewer's address and a new password of at least 10 characters, and check it reports one
+row updated:
+```sql
+update auth.users
+set encrypted_password = extensions.crypt('New-password-123', extensions.gen_salt('bf')),
+    updated_at = now()
+where email = 'dharma.reddy@bd.com';
+```
+Alternatively delete the user (Authentication → Users) and let them sign up again. Decisions already
+recorded keep their address either way.
 
 ## Optional AI configuration
 Off by default (`NullProvider`; no external calls). To enable suggestions on unresolved pairs:

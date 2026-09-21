@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python --version)",
+      "Read(//usr/local/bin/**)",
+      "Bash(uv venv *)",
+      "Bash(uv pip *)",
+      "Bash(KAIZEN_WORKSPACE=/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/ws .venv/bin/pytest -p no:cacheprovider)",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(grep -iE '\\\\.\\(db|sqlite3?\\)$')",
+      "Bash(/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/pytest -p no:cacheprovider tests/integration)",
+      "Bash(/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/python -c ' *)",
+      "Bash(npm ci *)",
+      "Bash(/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/pytest -p no:cacheprovider)",
+      "Bash(env -u KAIZEN_WORKSPACE /private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/kaizen auth supabase https://qhpaacbcirtziydohajb.supabase.co sb_publishable_fc6o7xcKvP9VQoWh9JnZAw_4p4p65QL)",
+      "Bash(env -u KAIZEN_WORKSPACE /private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/kaizen auth show)",
+      "Bash(git checkout *)",
+      "Bash(/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/ruff check *)",
+      "Bash(/private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/pytest -p no:cacheprovider tests/integration -q)",
+      "Bash(env -u KAIZEN_WORKSPACE /private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/kaizen serve)",
+      "Bash(curl -s http://127.0.0.1:8765/api/sessions/current)",
+      "Bash(env -u KAIZEN_WORKSPACE /private/tmp/claude-501/-Users-pahwa-Desktop-Projects-Kaizen/1b9df92c-15de-4677-8cc3-742c6f3ea467/scratchpad/venv/bin/kaizen serve --port 8766)",
+      "Bash(echo \"exit $?\")"
+    ]
+  }
+}

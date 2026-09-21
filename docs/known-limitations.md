@@ -31,10 +31,14 @@ JDE / MasterControl output, which has not been available.
 - PCO affected codes must match BOM parent items exactly.
 
 ## Review workflow
-- Reviewer identity, slot and blind mode are a server-side session and cannot be changed from the browser,
-  but this is identification, not authentication: anyone with access to the machine can sign in under any
-  name. A shared deployment needs SSO. The session cookie is not marked `Secure` because the local server
-  is plain HTTP.
+- Reviewer identity, slot and blind mode are a server-side session and cannot be changed from the browser.
+  Sign-in needs a password, but registration is open to any `@bd.com` address without proving it belongs
+  to the person: no confirmation email is sent, because BD mail blocks external senders. A company-wide
+  deployment should use BD single sign-on. Forgotten passwords are set by an administrator. The session cookie is not marked `Secure` because
+  the local server is plain HTTP.
+- With Supabase accounts only the login is shared: decisions, terminology and runs stay on the laptop where
+  they were made. Sign-in needs internet access. Supabase rate-limits sign-ins per IP address, and a
+  whole office behind one address shares that limit.
 - Sessions do not expire on their own; end one with "Sign out" or `kaizen review sessions --end <name>`.
 - Decisions live in the local workspace database; there is no multi-user server. Re-running the same inputs
   with the same code and terminology reproduces the same run id and row ids, so decisions re-attach; a code
@@ -50,8 +54,8 @@ JDE / MasterControl output, which has not been available.
 
 ## Reporting
 - Annotated BOM marks need page geometry; spreadsheet BOMs get a separate review page instead.
-- The Excel workbook is generated, not round-tripped: edits made in Excel are not re-imported yet
-  (reviewer decisions are captured through the UI/API).
+- Only reviewer decisions come back from an edited Excel workbook (`kaizen review import`, optional);
+  other edits made in Excel are ignored.
 
 ## Not regulatory-compliant
 This is a hackathon prototype. It is deterministic, auditable and offline, but it has not been validated
